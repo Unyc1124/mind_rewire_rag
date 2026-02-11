@@ -1,115 +1,152 @@
 # backend/llm.py
 
-import subprocess
+import requests
+from backend.config import GROQ_API_KEY
 
 
 def generate_with_llm(context: str, user_query: str) -> str:
     """
-    Generates a response using a local Ollama LLM.
-    Applies a self-reflection (Self-RAG) safety pass before returning output.
-    Falls back safely if the LLM fails.
+    Generates a supportive summary using Hosted LLM (Groq).
+    Applies Self-RAG reflection before returning output.
+    Falls back safely if API fails.
     """
 
     prompt = f"""
-You are a mental health navigator.
+You are a compassionate mental health navigator with clinical awareness.
 
-STRICT RULES (DO NOT BREAK):
-- Do NOT diagnose
-- Do NOT list all symptom clusters
-- Focus ONLY on the most relevant patterns
-- Write for a real user, not documentation
-- Keep the response short and structured
+STRICT BOUNDARIES:
+- No diagnostic labels or disorder names
+- No medication recommendations
+- Clinical tone without medical jargon
+- Concise, structured responses (120–150 words)
+- Use precise language that respects the user's experience
 
-YOU MUST FOLLOW THIS STRUCTURE:
+RESPONSE STRUCTURE (MANDATORY):
 
-1. What this might mean (2–3 sentences)
-   - Mention only the most relevant patterns
+### Clinical Understanding
+Briefly contextualize what they're experiencing using evidence-informed language (2 short points)
 
-2. Why this can happen (2–3 sentences)
-   - Simple explanation, no clinical terms
+### Underlying Mechanisms
+Explain potential psychophysiological or psychological factors at play (2 short points)
 
-3. One small thing to try today (1 step, practical)
+### Evidence-Based Self-Care Step
+One specific, actionable intervention grounded in therapeutic principles (1 practical action)
 
-4. When to seek help (1 sentence, gentle)
+### Professional Consultation Indicators
+When these patterns warrant clinical evaluation (1 clear sentence)
 
-CONTEXT (reference only what is relevant):
+CONTEXT:
 {context}
 
 USER INPUT:
 {user_query}
 
-FINAL RESPONSE:
+TONE GUIDELINES:
+- Use terms like "stress response," "cognitive patterns," "emotional regulation," "physiological symptoms"
+- Validate without minimizing: "This suggests..." rather than "You might just be..."
+- Balance warmth with clinical precision
+- Convey competence without overpromising
+
+RESPONSE:
 """
 
-
     try:
-        result = subprocess.run(
-            ["ollama", "run", "phi3:mini"],
-            input=prompt,
-            text=True,
-            capture_output=True,
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+               "model":"llama-3.1-8b-instant",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a supportive mental health assistant."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.4
+            },
             timeout=30
         )
 
-        draft = result.stdout.strip()
+        # 🔍 Debug status
+        print("GROQ STATUS:", response.status_code)
 
-        # Apply Self-RAG reflection
+        if response.status_code != 200:
+            print("GROQ ERROR:", response.text)
+            raise RuntimeError("Groq API failed")
+
+        data = response.json()
+
+        draft = data["choices"][0]["message"]["content"].strip()
+
+        print("LLM RAW RESPONSE:", draft)
+
+        if not draft:
+            raise RuntimeError("Empty LLM response")
+
         return self_rag_reflection(draft)
 
-    except Exception:
-        # Safe fallback if Ollama fails
-        return fallback_response(context)
+    except Exception as e:
+        print("LLM FALLBACK TRIGGERED:", str(e))
+        return fallback_response(context, user_query)
 
 
+# ================================
+# SELF-RAG REFLECTION
+# ================================
 def self_rag_reflection(draft: str) -> str:
-    """
-    Self-RAG reflection layer.
-    Ensures the response is non-diagnostic, safe, and spec-compliant.
-    """
 
     banned_phrases = [
         "you have",
         "you are diagnosed",
         "this means you are",
         "disorder",
+        "mental illness",
         "medication",
         "prescription",
-        "treatment plan"
+        "treatment plan",
+        "clinical condition"
     ]
 
     lowered = draft.lower()
 
-    # If unsafe/diagnostic language detected → rewrite safely
     for phrase in banned_phrases:
         if phrase in lowered:
             return (
                 "Based on what you shared, some patterns may be relevant.\n\n"
-                "This tool does not provide diagnoses, but helps people understand "
-                "their experiences in a clearer way.\n\n"
+                "This tool does not provide diagnoses. Its purpose is to help "
+                "you reflect on your experiences in a supportive way.\n\n"
                 "If these concerns feel intense, persistent, or unsafe, "
-                "seeking support from a qualified mental health professional is strongly recommended."
+                "seeking support from a qualified mental health professional "
+                "or a trusted person is strongly recommended."
             )
 
-    # Ensure help-seeking guidance is present
     if "professional" not in lowered and "support" not in lowered:
         draft += (
             "\n\nIf these experiences start to feel overwhelming or unsafe, "
-            "reaching out to a mental health professional or trusted person can be very helpful."
+            "reaching out to a mental health professional or a trusted person "
+            "can be very helpful."
         )
 
     return draft
 
 
-def fallback_response(context: str) -> str:
-    """
-    Deterministic, safe fallback when LLM is unavailable.
-    Still RAG-based and compliant with the spec.
-    """
+# ================================
+# FALLBACK
+# ================================
+def fallback_response(context: str, user_query: str) -> str:
 
     return (
-        "Based on what you shared, here are some patterns that may be relevant:\n\n"
-        f"{context[:600]}\n\n"
-        "Many people experience similar patterns, especially during periods of stress.\n"
-        "This is not a diagnosis. If these concerns feel overwhelming or unsafe, "
-        "seeking human support is important."
+        "Based on what you shared, there are some patterns that may be worth noticing.\n\n"
+        f"{context[:500]}\n\n"
+        "Many people experience similar feelings, especially during times of stress "
+        "or change. This is not a diagnosis.\n\n"
+        "If these experiences feel overwhelming or unsafe, seeking human support "
+        "from a trusted person or professional is important."
     )

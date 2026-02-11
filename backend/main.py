@@ -3,85 +3,96 @@
 from fastapi import FastAPI
 from backend.schemas import UserInput, NavigatorResponse
 from backend.safety import check_risk
-from backend.kb_loader import load_kb_sections
-from backend.embeddings import build_kb_embeddings
 from backend.retriever import KBRetriever
 from backend.llm import generate_with_llm
 
 
 app = FastAPI(title="Mind Rewire Navigator")
 
+retriever = KBRetriever()
+
+
+# ===============================
+# HEALTH CHECK
+# ===============================
 @app.get("/")
 def health_check():
     return {"status": "ok"}
 
-@app.get("/debug/embeddings")
-def debug_embeddings():
-    chunks, embeddings = build_kb_embeddings()
-    return {
-        "total_chunks": len(chunks),
-        "embedding_shape": len(embeddings[0]),
-        "sample_text": chunks[0][:200]
-    }
 
-
-
-@app.get("/debug/kb")
-def debug_kb():
-    chunks = load_kb_sections()
-    return {
-        "total_chunks": len(chunks),
-        "sample_chunk": chunks[0][:300]
-    }
-
-
-retriever = KBRetriever()
-
-@app.get("/debug/search")
-def debug_search(q: str):
-    results = retriever.search(q)
-    return {
-        "query": q,
-        "matches": results
-    }
-
-# @app.post("/navigator")
-# def navigator(input: UserInput):
-#     # Step 1: safety check
-#     risk = check_risk(input.text)
-
-#     if risk == "HIGH":
-#         return NavigatorResponse(
-#             status="CRISIS",
-#             message="Please seek immediate help. You are not alone."
-#         )
-
-#     # Step 2: placeholder (we add RAG later)
-#     return NavigatorResponse(
-#         status="SAFE",
-#         message="Thanks for sharing. We are building your support plan."
-#     )
-
-
+# ===============================
+# NAVIGATOR ENDPOINT
+# ===============================
 @app.post("/navigator")
 def navigator(input: UserInput):
-    # Step 1: Safety check
+
+    # Step 1 — Safety check
     risk = check_risk(input.text)
 
     if risk == "HIGH":
         return NavigatorResponse(
             status="CRISIS",
-            message="Please seek immediate help. You are not alone."
+            summary="Please seek immediate help. You are not alone.",
+            focus_areas=[],
+            plan_today=[],
+            plan_week=[]
         )
 
-    # Step 2: Retrieve ONLY top 2 relevant KB chunks
+    # Step 2 — Retrieve RAG context
     context_chunks = retriever.search(input.text, top_k=1)
     context = "\n\n".join(context_chunks)
 
-    # Step 3: Generate response using LLM + Self-RAG
-    answer = generate_with_llm(context, input.text)
+    # Step 3 — Generate summary via Hosted LLM
+    summary = generate_with_llm(context, input.text)
 
+    # ===============================
+    # Step 4 — CONTROLLED FOCUS EXTRACTION
+    # ===============================
+    text_lower = input.text.lower()
+    focus_areas = []
+
+    if any(word in text_lower for word in ["sleep", "insomnia", "restless"]):
+        focus_areas.append("Sleep patterns")
+
+    if any(word in text_lower for word in ["anxiety", "anxious", "panic", "worry"]):
+        focus_areas.append("Anxiety & worry")
+
+    if any(word in text_lower for word in ["stress", "overwhelm", "pressure"]):
+        focus_areas.append("Stress levels")
+
+    if any(word in text_lower for word in ["sad", "low", "empty", "down"]):
+        focus_areas.append("Low mood")
+
+    if not focus_areas:
+        focus_areas.append("Emotional wellbeing")
+
+    # ===============================
+    # Step 5 — CONTROLLED PLAN TEMPLATES
+    # ===============================
+
+    plan_today = [
+        "Pause and take 5 slow, deep breaths.",
+        "Write down one thought that feels heavy right now."
+    ]
+
+    # 7-day structured plan
+    plan_week = [
+        "Create a calming wind-down routine before sleep.",
+        "Schedule one small activity you usually enjoy.",
+        "Notice repeating thoughts without judging them.",
+        "Take short breaks when feeling overwhelmed.",
+        "Practice grounding using your senses.",
+        "Spend time outdoors or in natural light.",
+        "Reflect on what felt slightly better this week."
+    ]
+
+    # ===============================
+    # FINAL RESPONSE
+    # ===============================
     return NavigatorResponse(
         status="SAFE",
-        message=answer
+        summary=summary,
+        focus_areas=focus_areas,
+        plan_today=plan_today,
+        plan_week=plan_week
     )
