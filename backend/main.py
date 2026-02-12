@@ -9,7 +9,15 @@ from backend.llm import generate_with_llm
 
 app = FastAPI(title="Mind Rewire Navigator")
 
-retriever = KBRetriever()
+# retriever = KBRetriever()
+retriever = None
+
+def get_retriever():
+    global retriever
+    if retriever is None:
+        retriever = KBRetriever()
+    return retriever
+
 
 
 # ===============================
@@ -39,7 +47,10 @@ def navigator(input: UserInput):
         )
 
     # Step 2 — Retrieve RAG context
-    context_chunks = retriever.search(input.text, top_k=1)
+    # context_chunks = retriever.search(input.text, top_k=1)
+    retriever_instance = get_retriever()
+    context_chunks = retriever_instance.search(input.text, top_k=1)
+
     context = "\n\n".join(context_chunks)
 
     # Step 3 — Generate summary via Hosted LLM
